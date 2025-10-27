@@ -9,7 +9,7 @@ exports.getDashboardMetrics = async (req, res, next) => {
     // Total Chefs
     const totalChefs = await Chef.countDocuments();
     
-    // Total Revenue
+    // Total Revenue (only from completed orders)
     const revenueResult = await Order.aggregate([
       { $match: { status: { $in: ['done', 'served'] } } },
       { $group: { _id: null, total: { $sum: '$totalPrice' } } }
@@ -19,7 +19,7 @@ exports.getDashboardMetrics = async (req, res, next) => {
     // Total Orders
     const totalOrders = await Order.countDocuments();
     
-    // Total Unique Clients
+    // Total Unique Clients (based on phone number)
     const uniqueClients = await Order.distinct('customerInfo.phoneNumber');
     const totalClients = uniqueClients.length;
     
@@ -27,7 +27,7 @@ exports.getDashboardMetrics = async (req, res, next) => {
       success: true,
       data: {
         chefs: totalChefs,
-        totalRevenue,
+        totalRevenue: parseFloat(totalRevenue.toFixed(2)),
         totalOrders,
         totalClients
       }
@@ -82,7 +82,7 @@ exports.getOrdersSummary = async (req, res, next) => {
         served,
         dineIn,
         takeaway,
-        revenue,
+        revenue: parseFloat(revenue.toFixed(2)),
         period: {
           start: startDate,
           end: endDate
@@ -154,14 +154,14 @@ exports.getGraphData = async (req, res, next) => {
           break;
         case 'weekly':
           const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-          label = days[item._id - 1];
+          label = days[item._id - 1] || 'Unknown';
           break;
         case 'monthly':
           label = `Day ${item._id}`;
           break;
         case 'yearly':
           const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-          label = months[item._id - 1];
+          label = months[item._id - 1] || 'Unknown';
           break;
         default:
           label = item._id;
@@ -169,7 +169,7 @@ exports.getGraphData = async (req, res, next) => {
       
       return {
         label,
-        revenue: item.revenue,
+        revenue: parseFloat(item.revenue.toFixed(2)),
         orders: item.orders
       };
     });
@@ -202,16 +202,17 @@ exports.getOrderProcessing = async (req, res, next) => {
     .sort({ createdAt: 1 });
     
     const ordersWithTimeRemaining = activeOrders.map(order => {
-      const elapsedMinutes = Math.floor(
-        (Date.now() - order.processingStartTime.getTime()) / (1000 * 60)
-      );
+      const elapsedMinutes = order.processingStartTime 
+        ? Math.floor((Date.now() - order.processingStartTime.getTime()) / (1000 * 60))
+        : 0;
+      
       const remainingTime = Math.max(0, order.totalPreparationTime - elapsedMinutes);
       
       return {
         ...order.toObject(),
         elapsedTime: elapsedMinutes,
         remainingTime,
-        isOverdue: remainingTime === 0
+        isOverdue: remainingTime === 0 && order.status === 'processing'
       };
     });
     
@@ -224,26 +225,3 @@ exports.getOrderProcessing = async (req, res, next) => {
     next(error);
   }
 };
-
-const monitorOrderProcessing = async () => {
-  const overdueThreshold = 15; // minutes
-  
-  const overdueOrders = await Order.find({
-    status: 'processing',
-    createdAt: {
-      $lt: new Date(Date.now() - overdueThreshold * 60000)
-    }
-  });
-
-  overdueOrders.forEach(order => {
-    notifyAdmin({
-      type: 'OVERDUE_ORDER',
-      orderId: order._id,
-      waitTime: Math.floor((Date.now() - order.createdAt) / 60000)
-    });
-  });
-<<<<<<< HEAD
-};
-=======
-};
->>>>>>> feature/order-processing
