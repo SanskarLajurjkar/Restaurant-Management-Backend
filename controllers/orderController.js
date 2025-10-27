@@ -28,6 +28,33 @@ const assignChefToOrder = async () => {
   }
 };
 
+// Auto-assign chef to order
+const autoAssignChef = async (orderId) => {
+  try {
+    // Get available chefs
+    const availableChefs = await Chef.find({ status: 'available' })
+      .sort({ currentOrders: 1 })
+      .limit(1);
+
+    if (availableChefs.length === 0) {
+      return false;
+    }
+
+    const chef = availableChefs[0];
+    
+    // Assign order to chef
+    await Order.findByIdAndUpdate(orderId, {
+      chefId: chef._id,
+      status: 'processing'
+    });
+
+    return true;
+  } catch (error) {
+    console.error('Chef assignment failed:', error);
+    return false;
+  }
+};
+
 // @desc    Get all orders
 // @route   GET /api/orders
 exports.getAllOrders = async (req, res, next) => {
@@ -98,111 +125,31 @@ exports.getOrdersByChef = async (req, res, next) => {
 
 // @desc    Create new order
 // @route   POST /api/orders
-exports.createOrder = async (req, res, next) => {
+exports.createOrder = async (req, res) => {
   try {
-    const { items, orderType, customerInfo, cookingInstructions, tableNumber } = req.body;
+    const newOrder = await Order.create(req.body);
     
-    let totalPrice = 0;
-    let totalPreparationTime = 0;
-    const orderItems = [];
+    // Attempt automatic chef assignment
+    const isAssigned = await autoAssignChef(newOrder._id);
     
-    // Validate and process items
-    for (const item of items) {
-      const menuItem = await Menu.findById(item.menuItem);
-      
-      if (!menuItem) {
-        return res.status(404).json({ 
-          success: false, 
-          message: `Menu item not found: ${item.menuItem}` 
-        });
-      }
-      
-      if (menuItem.stock < item.quantity) {
-        return res.status(400).json({ 
-          success: false, 
-          message: `Insufficient stock for ${menuItem.name}. Available: ${menuItem.stock}` 
-        });
-      }
-      
-      // Update stock
-      menuItem.stock -= item.quantity;
-      await menuItem.save();
-      
-      totalPrice += menuItem.price * item.quantity;
-      totalPreparationTime = Math.max(totalPreparationTime, menuItem.averagePreparationTime);
-      
-      orderItems.push({
-        menuItem: menuItem._id,
-        name: menuItem.name,
-        quantity: item.quantity,
-        price: menuItem.price,
-        preparationTime: menuItem.averagePreparationTime
+    if (!isAssigned) {
+      // Notify admin of unassigned order
+      notifyAdmin({
+        type: 'UNASSIGNED_ORDER',
+        orderId: newOrder._id,
+        message: 'New order requires manual chef assignment'
       });
     }
-    
-    // Handle table reservation for dine-in
-    if (orderType === 'dineIn' && tableNumber) {
-      const table = await Table.findOne({ tableNumber });
-      
-      if (!table) {
-        return res.status(404).json({ 
-          success: false, 
-          message: 'Table not found' 
-        });
-      }
-      
-      if (table.isReserved) {
-        return res.status(400).json({ 
-          success: false, 
-          message: 'Table is already reserved' 
-        });
-      }
-      
-      table.isReserved = true;
-      table.reservedBy = {
-        customerName: customerInfo.name,
-        phoneNumber: customerInfo.phoneNumber,
-        numberOfMembers: customerInfo.numberOfMembers
-      };
-      await table.save();
-    }
-    
-    // Assign chef
-    const chef = await assignChefToOrder();
-    
-    // Create order
-    const order = new Order({
-      orderId: generateOrderId(),
-      items: orderItems,
-      totalPrice,
-      orderType,
-      customerInfo,
-      cookingInstructions,
-      tableNumber: orderType === 'dineIn' ? tableNumber : null,
-      chefAssigned: chef ? chef._id : null,
-      processingStartTime: new Date(),
-      totalPreparationTime,
-      status: 'processing'
-    });
-    
-    await order.save();
-    
-    // Update chef's order count
-    if (chef) {
-      chef.currentOrdersCount += 1;
-      chef.assignedOrders.push(order._id);
-      await chef.save();
-    }
-    
-    await order.populate('items.menuItem');
-    await order.populate('chefAssigned', 'name');
-    
-    res.status(201).json({ 
-      success: true, 
-      data: order 
+
+    res.status(201).json({
+      success: true,
+      data: newOrder
     });
   } catch (error) {
-    next(error);
+    res.status(500).json({
+      success: false,
+      error: 'Order creation failed'
+    });
   }
 };
 
