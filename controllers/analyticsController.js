@@ -224,3 +224,22 @@ exports.getOrderProcessing = async (req, res, next) => {
     next(error);
   }
 };
+
+const monitorOrderProcessing = async () => {
+  const overdueThreshold = 15; // minutes
+  
+  const overdueOrders = await Order.find({
+    status: 'processing',
+    createdAt: {
+      $lt: new Date(Date.now() - overdueThreshold * 60000)
+    }
+  });
+
+  overdueOrders.forEach(order => {
+    notifyAdmin({
+      type: 'OVERDUE_ORDER',
+      orderId: order._id,
+      waitTime: Math.floor((Date.now() - order.createdAt) / 60000)
+    });
+  });
+};
