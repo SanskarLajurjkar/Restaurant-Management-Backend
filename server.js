@@ -4,6 +4,7 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const connectDB = require('./config/database');
 const errorHandler = require('./middleware/errorHandler');
+const { checkAndCompleteOrders, initializeChefs } = require('./utils/orderProcessing');
 
 // Load environment variables
 dotenv.config();
@@ -18,6 +19,15 @@ connectDB();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Middleware to check order completion on each request
+app.use(async (req, res, next) => {
+  // Run order completion check in background (don't block requests)
+  checkAndCompleteOrders().catch(err => 
+    console.error('Background order check error:', err)
+  );
+  next();
+});
 
 // Import Routes
 const menuRoutes = require('./routes/menuRoutes');
@@ -54,6 +64,20 @@ app.use((req, res) => {
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server is running on port ${PORT}`);
+
+// Start server and initialize system
+app.listen(PORT, async () => {
+  console.log(`Server is running on port ${PORT}`);
+  
+  // Initialize default chefs if needed
+  await initializeChefs();
+  
+  // Set up periodic order completion check (every 30 seconds)
+  setInterval(() => {
+    checkAndCompleteOrders().catch(err => 
+      console.error('Periodic order check error:', err)
+    );
+  }, 30000);
+  
+  console.log(' Order processing system initialized');
 });
